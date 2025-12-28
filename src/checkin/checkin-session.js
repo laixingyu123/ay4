@@ -287,6 +287,62 @@ class AnyRouterSessionSignIn {
 	}
 
 	/**
+	 * 更新令牌信息
+	 * @param {Object} page - Playwright page 对象
+	 * @param {string} apiUser - API User ID
+	 * @param {Object} tokenData - 完整的令牌信息
+	 * @returns {Object|null} - 更新后的令牌信息
+	 */
+	async updateToken(page, apiUser, tokenData) {
+		try {
+			console.log(`[令牌] 更新令牌 ID: ${tokenData.id}...`);
+			const result = await page.evaluate(
+				async ({ baseUrl, apiUser, tokenData }) => {
+					try {
+						const response = await fetch(`${baseUrl}/api/token/`, {
+							method: 'PUT',
+							headers: {
+								Accept: 'application/json, text/plain, */*',
+								'Content-Type': 'application/json',
+								'new-api-user': apiUser,
+							},
+							body: JSON.stringify(tokenData),
+							credentials: 'include',
+						});
+
+						const data = await response.json();
+						return {
+							status: response.status,
+							data: data,
+						};
+					} catch (error) {
+						return {
+							error: error.message,
+						};
+					}
+				},
+				{ baseUrl: this.baseUrl, apiUser, tokenData }
+			);
+
+			if (result.error) {
+				console.log(`[失败] 更新令牌失败: ${result.error}`);
+				return null;
+			}
+
+			if (result.status === 200 && result.data.success) {
+				console.log(`[成功] 令牌 ${tokenData.id} 更新成功`);
+				return result.data.data;
+			}
+
+			console.log(`[失败] 更新令牌失败: ${result.data.message || '未知错误'}`);
+			return null;
+		} catch (error) {
+			console.log(`[失败] 更新令牌时发生错误: ${error.message}`);
+			return null;
+		}
+	}
+
+	/**
 	 * 获取用户信息
 	 * @param {Object} cookies - cookies 对象
 	 * @param {string} apiUser - API User ID
@@ -591,6 +647,56 @@ class AnyRouterSessionSignIn {
 							if (created) {
 								tokens = await this.getTokens(page, apiUser);
 							}
+						} else {
+							// 补充令牌额度功能
+							// 如果已有令牌，查询accountInfo.tokens中是否有补充额度的，字段为supplement_quota
+							// 如果有，找到tokens中对应的令牌，增加其remain_quota（remain_quota + supplement_quota），调用更新token接口
+							if (accountInfo && accountInfo.tokens && Array.isArray(accountInfo.tokens)) {
+								const tokensToSupplement = accountInfo.tokens.filter(
+									(t) => t.supplement_quota && t.supplement_quota > 0
+								);
+
+								if (tokensToSupplement.length > 0) {
+									console.log(
+										`[令牌管理] 发现 ${tokensToSupplement.length} 个令牌需要补充额度`
+									);
+
+									for (const configToken of tokensToSupplement) {
+										// 通过id匹配令牌
+										const matchedToken = tokens.find((t) => t.id === configToken.id);
+										if (matchedToken) {
+											const newRemainQuota =
+												(matchedToken.remain_quota || 0) + configToken.supplement_quota;
+											console.log(
+												`[令牌管理] 令牌 ${matchedToken.id} 补充额度: ${configToken.supplement_quota} -> 新额度: ${newRemainQuota}`
+											);
+
+											// 构建完整的令牌数据用于更新
+											const updatedTokenData = {
+												...matchedToken,
+												remain_quota: newRemainQuota,
+											};
+
+											const updateResult = await this.updateToken(
+												page,
+												apiUser,
+												updatedTokenData
+											);
+											if (updateResult) {
+												// 更新本地tokens数组中的数据
+												matchedToken.remain_quota = updateResult.remain_quota;
+												console.log(
+													`[令牌管理] 令牌 ${matchedToken.id} 额度补充成功，当前额度: ${updateResult.remain_quota}`
+												);
+											}
+										} else {
+											console.log(
+												`[令牌管理] 未找到ID为 ${configToken.id} 的令牌，跳过补充`
+											);
+										}
+									}
+								}
+							}
 						}
 
 						// 如果有待上传的出售令牌，批量上传到服务器
@@ -611,6 +717,7 @@ class AnyRouterSessionSignIn {
 										is_sold: false,
 										quota: quota,
 										source_name: `${accountInfo.username || ''}&${pending.name}`,
+										account_id: accountInfo._id,
 									});
 								}
 							}
@@ -630,9 +737,11 @@ class AnyRouterSessionSignIn {
 							userInfo.tokens = tokens.map((token) => ({
 								id: token.id,
 								key: token.key,
+								name: token.name,
 								unlimited_quota: token.unlimited_quota,
 								used_quota: token.used_quota,
 								remain_quota: token.remain_quota,
+								supplement_quota: 0
 							}));
 							console.log(`[信息] 成功获取 ${userInfo.tokens.length} 个令牌信息`);
 						}

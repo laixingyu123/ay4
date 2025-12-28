@@ -96,10 +96,11 @@ class UnifiedAnyRouterChecker {
 
 		console.log(`[登录] ${accountName}: 使用用户名密码登录签到`);
 
-		// 调用登录模块
+		// 调用登录模块，传递账号信息用于令牌管理
 		const loginResult = await this.signInModule.loginAndGetSession(
 			accountInfo.username,
-			accountInfo.password
+			accountInfo.password,
+			accountInfo
 		);
 
 		if (loginResult) {
@@ -126,6 +127,10 @@ class UnifiedAnyRouterChecker {
 				updateData.used = Math.round((loginResult.userInfo.used_quota || 0) / 500000);
 				if (loginResult.userInfo.aff_code) {
 					updateData.aff_code = loginResult.userInfo.aff_code;
+				}
+				// 添加令牌信息
+				if (loginResult.userInfo.tokens) {
+					updateData.tokens = loginResult.userInfo.tokens;
 				}
 
 				const quota = (loginResult.userInfo.quota / 500000).toFixed(2);

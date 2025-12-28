@@ -14,8 +14,9 @@ import apiClient, { handleApiResponse } from './client.js';
  * @param {Object} keyData - Key数据
  * @param {string} keyData.key - AI接口的API密钥（必需）
  * @param {string} keyData.key_type - API Key的类型（必需）：coderouter | anyrouter | other
- * @param {number} [keyData.quota=0] - API Key的可用额度（可选，默认0）
+ * @param {number} [keyData.quota=0] - API Key的初始额度（可选，默认0，单位：美元）
  * @param {string} [keyData.source_name] - Key的来源或提供者名称（可选）。注意：如果 key_type 是 coderouter，则此字段应填写 GitHub 用户名
+ * @param {string} [keyData.account_id] - 关联的AnyRouter账号ID（可选，外键指向anyr-accounts表）
  * @param {boolean} [keyData.is_sold=false] - 该Key是否已出售（可选，默认false）
  * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
  * @example
@@ -39,7 +40,7 @@ import apiClient, { handleApiResponse } from './client.js';
  * });
  */
 export async function addKey(keyData) {
-	const { key, key_type, quota = 0, source_name, is_sold = false } = keyData;
+	const { key, key_type, quota = 0, source_name, account_id, is_sold = false } = keyData;
 
 	// 验证必需字段
 	if (!key) {
@@ -101,7 +102,12 @@ export async function addKey(keyData) {
 		requestData.source_name = source_name;
 	}
 
-	return handleApiResponse(apiClient.post('/ai-key/addKey', requestData));
+	// 只有在提供了 account_id 时才添加到请求中
+	if (account_id !== undefined) {
+		requestData.account_id = account_id;
+	}
+
+	return handleApiResponse(apiClient.post('/ai-key-admin/addKey', requestData));
 }
 
 /**
@@ -120,8 +126,9 @@ export async function addKey(keyData) {
  * @param {Array<Object>} keys - Key数组，最多100个
  * @param {string} keys[].key - AI接口的API密钥（必需）
  * @param {string} keys[].key_type - API Key的类型（必需）：coderouter | anyrouter | other
- * @param {number} [keys[].quota=0] - API Key的可用额度（可选，默认0）
+ * @param {number} [keys[].quota=0] - API Key的初始额度（可选，默认0，单位：美元）
  * @param {string} [keys[].source_name] - Key的来源或提供者名称（可选）
+ * @param {string} [keys[].account_id] - 关联的AnyRouter账号ID（可选，外键指向anyr-accounts表）
  * @param {boolean} [keys[].is_sold=false] - 该Key是否已出售（可选，默认false）
  * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
  * @example
@@ -217,13 +224,133 @@ export async function addKeys(keys) {
 			item.source_name = keyData.source_name;
 		}
 
+		if (keyData.account_id !== undefined) {
+			item.account_id = keyData.account_id;
+		}
+
 		return item;
 	});
 
-	return handleApiResponse(apiClient.post('/ai-key/addKeys', { keys: requestKeys }));
+	return handleApiResponse(apiClient.post('/ai-key-admin/addKeys', { keys: requestKeys }));
+}
+
+/**
+ * 更新API Key信息
+ * @description 更新指定API Key的信息。支持更新所有字段（除了_id和create_date）。
+ *
+ * **支持更新的字段**：
+ * - key: API密钥
+ * - key_type: Key类型
+ * - quota: 初始额度（单位：美元）
+ * - remain_quota: 剩余额度（单位：美元）
+ * - used_quota: 已使用额度（单位：美元）
+ * - query_date: 查询时间
+ * - quota_update_date: 额度更新时间
+ * - account_id: 关联账号ID
+ * - source_name: 来源名称
+ * - is_sold: 是否已出售
+ * - sell_date: 出售时间
+ * - is_deleted: 是否删除
+ * - delete_date: 删除时间
+ *
+ * **注意事项**：
+ * - _id 和 create_date 字段不允许更新
+ * - 只需传入需要更新的字段，无需传入所有字段
+ *
+ * @param {string} _id - Key记录ID（必需）
+ * @param {Object} updateData - 要更新的数据对象（必需）
+ * @param {string} [updateData.key] - AI接口的API密钥
+ * @param {string} [updateData.key_type] - API Key的类型：coderouter | anyrouter | other
+ * @param {number} [updateData.quota] - API Key的初始额度（单位：美元）
+ * @param {number} [updateData.remain_quota] - API Key的剩余可用额度（单位：美元）
+ * @param {number} [updateData.used_quota] - API Key的已使用额度（单位：美元）
+ * @param {number} [updateData.query_date] - 最后一次查询额度的时间戳（毫秒）
+ * @param {number} [updateData.quota_update_date] - 额度信息最后更新的时间戳（毫秒）
+ * @param {string} [updateData.account_id] - 关联的AnyRouter账号ID
+ * @param {string} [updateData.source_name] - Key的来源或提供者名称
+ * @param {boolean} [updateData.is_sold] - 该Key是否已出售
+ * @param {number} [updateData.sell_date] - Key出售时间戳（毫秒）
+ * @param {boolean} [updateData.is_deleted] - 标记Key是否已删除（软删除）
+ * @param {number} [updateData.delete_date] - Key删除时间戳（毫秒）
+ * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+ * @example
+ * // 更新 Key 的额度信息
+ * const result = await updateKeyInfo('507f1f77bcf86cd799439011', {
+ *   remain_quota: 85.5,
+ *   used_quota: 14.5,
+ *   quota_update_date: Date.now()
+ * });
+ * if (result.success) {
+ *   console.log('Key更新成功:', result.data);
+ * }
+ *
+ * @example
+ * // 标记 Key 为已出售
+ * const result = await updateKeyInfo('507f1f77bcf86cd799439011', {
+ *   is_sold: true,
+ *   sell_date: Date.now()
+ * });
+ */
+export async function updateKeyInfo(_id, updateData) {
+	// 验证必需字段
+	if (!_id) {
+		return {
+			success: false,
+			error: 'Key记录ID不能为空',
+		};
+	}
+
+	if (!updateData || typeof updateData !== 'object') {
+		return {
+			success: false,
+			error: '更新数据不能为空且必须为对象',
+		};
+	}
+
+	// 检查是否有要更新的字段
+	const updateKeys = Object.keys(updateData);
+	if (updateKeys.length === 0) {
+		return {
+			success: false,
+			error: '至少需要提供一个要更新的字段',
+		};
+	}
+
+	// 不允许更新的字段
+	const forbiddenFields = ['_id', 'create_date'];
+	for (const field of forbiddenFields) {
+		if (field in updateData) {
+			return {
+				success: false,
+				error: `不允许更新 ${field} 字段`,
+			};
+		}
+	}
+
+	// 验证 key_type 枚举值（如果提供）
+	if (updateData.key_type !== undefined && !['coderouter', 'anyrouter', 'other'].includes(updateData.key_type)) {
+		return {
+			success: false,
+			error: 'Key类型必须为 coderouter、anyrouter 或 other',
+		};
+	}
+
+	// 验证数字字段为非负数
+	const numericFields = ['quota', 'remain_quota', 'used_quota'];
+	for (const field of numericFields) {
+		if (updateData[field] !== undefined && (typeof updateData[field] !== 'number' || updateData[field] < 0)) {
+			return {
+				success: false,
+				error: `${field} 必须为非负数`,
+			};
+		}
+	}
+
+	return handleApiResponse(apiClient.post('/ai-key-admin/updateKeyInfo', { _id, updateData }));
 }
 
 export default {
 	addKey,
 	addKeys,
+	updateKeyInfo,
 };
